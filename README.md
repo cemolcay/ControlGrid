@@ -23,7 +23,7 @@ A generic 2D grid layout component for UIKit, built on `UIScrollView` with fully
 
 ## Requirements
 
-- iOS 13+
+- iOS 12+
 - UIKit
 - Swift 5.7+
 
