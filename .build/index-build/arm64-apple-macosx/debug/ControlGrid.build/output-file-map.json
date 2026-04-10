@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/cemolcay/Desktop/ControlGrid/.build/index-build/arm64-apple-macosx/debug/ControlGrid.build/primary.swiftdeps"
+  },
+  "/Users/cemolcay/Desktop/ControlGrid/Sources/ControlGrid/ControlGrid.swift": {
+    "dependencies": "/Users/cemolcay/Desktop/ControlGrid/.build/index-build/arm64-apple-macosx/debug/ControlGrid.build/ControlGrid.d",
+    "object": "/Users/cemolcay/Desktop/ControlGrid/.build/index-build/arm64-apple-macosx/debug/ControlGrid.build/ControlGrid.swift.o",
+    "swiftmodule": "/Users/cemolcay/Desktop/ControlGrid/.build/index-build/arm64-apple-macosx/debug/ControlGrid.build/ControlGrid~partial.swiftmodule",
+    "swift-dependencies": "/Users/cemolcay/Desktop/ControlGrid/.build/index-build/arm64-apple-macosx/debug/ControlGrid.build/ControlGrid.swiftdeps",
+    "diagnostics": "/Users/cemolcay/Desktop/ControlGrid/.build/index-build/arm64-apple-macosx/debug/ControlGrid.build/ControlGrid.dia"
+  }
+}
