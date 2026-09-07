@@ -196,10 +196,14 @@ public struct ControlGridRow {
     public var cells: [ControlGridCell]
     /// Row-level layout overrides. Nil uses the grid's `defaultRowSpec`.
     public var spec: RowSpec?
+    /// When true, the row consumes no height or adjacent row spacing, while its cell containers
+    /// remain attached so showing it again can animate from its collapsed position.
+    public var isHidden: Bool
 
-    public init(cells: [ControlGridCell], spec: RowSpec? = nil) {
+    public init(cells: [ControlGridCell], spec: RowSpec? = nil, isHidden: Bool = false) {
         self.cells = cells
         self.spec = spec
+        self.isHidden = isHidden
     }
 }
 
@@ -387,15 +391,20 @@ public class ControlGrid: UIScrollView {
 
         // --- Vertical pass ---
         let rowSpecs = rows.map { $0.spec ?? defaultRowSpec }
-        let rowDimensions = rowSpecs.map { $0.height }
-        let (rowHeights, needsScrolling) = distributeSizes(
+        let visibleRowIndices = rows.indices.filter { !rows[$0].isHidden }
+        let visibleRowDimensions = visibleRowIndices.map { rowSpecs[$0].height }
+        let (visibleRowHeights, needsScrolling) = distributeSizes(
             availableSpace: availableHeight,
-            dimensions: rowDimensions,
+            dimensions: visibleRowDimensions,
             spacing: rowSpacing,
             proportionalShrink: false
         )
+        var rowHeights = [CGFloat](repeating: 0, count: rowCount)
+        for (visibleIndex, rowIndex) in visibleRowIndices.enumerated() {
+            rowHeights[rowIndex] = visibleRowHeights[visibleIndex]
+        }
 
-        let totalRowSpacing = CGFloat(max(0, rowCount - 1)) * rowSpacing
+        let totalRowSpacing = CGFloat(max(0, visibleRowIndices.count - 1)) * rowSpacing
         let totalContentHeight = rowHeights.reduce(0, +) + totalRowSpacing
 
         isScrollEnabled = needsScrolling
@@ -414,6 +423,7 @@ public class ControlGrid: UIScrollView {
         // --- Horizontal pass + frame assignment ---
         var currentY = yOffset
         for (rowIndex, row) in rows.enumerated() {
+            let rowIsHidden = row.isHidden
             let rowSpec = row.spec ?? defaultRowSpec
             let rowH = rowHeights[rowIndex]
             let cellSpacing = rowSpec.cellSpacing ?? defaultCellSpacing
@@ -445,11 +455,16 @@ public class ControlGrid: UIScrollView {
             var currentX = xOffset
             for (colIndex, container) in (cellContainers[rowIndex]).enumerated() {
                 let w = cellWidths[colIndex]
+                container.isHidden = rowIsHidden
                 container.frame = CGRect(x: currentX, y: currentY, width: w, height: rowH)
                 currentX += w + cellSpacing
             }
 
-            currentY += rowH + rowSpacing
+            guard !rowIsHidden else { continue }
+            currentY += rowH
+            if rowIndex != visibleRowIndices.last {
+                currentY += rowSpacing
+            }
         }
     }
 

@@ -91,6 +91,40 @@ final class ControlGridTests: XCTestCase {
         XCTAssertEqual(view.superview!.frame.height, 100, accuracy: 0.001)
     }
 
+    func testHiddenRowCollapsesWithoutRemovingItsContainerOrLeavingSpacing() {
+        let content = UIView()
+        let keyboard = UIView()
+        let grid = makeGrid(size: CGSize(width: 200, height: 300), rowSpacing: 10)
+        grid.setRows([
+            row(content, height: .flexible(min: nil, max: nil)),
+            ControlGridRow(
+                cells: [ControlGridCell(view: keyboard)],
+                spec: RowSpec(height: .fraction(0.25)),
+                isHidden: true),
+        ])
+        grid.layoutIfNeeded()
+        let keyboardContainer = keyboard.superview
+
+        XCTAssertEqual(content.superview!.frame.height, 300, accuracy: 0.001)
+        XCTAssertEqual(keyboardContainer!.frame.minY, 300, accuracy: 0.001)
+        XCTAssertEqual(keyboardContainer!.frame.height, 0, accuracy: 0.001)
+        XCTAssertTrue(keyboardContainer!.isHidden)
+
+        grid.setRows([
+            row(content, height: .flexible(min: nil, max: nil)),
+            ControlGridRow(
+                cells: [ControlGridCell(view: keyboard)],
+                spec: RowSpec(height: .fraction(0.25))),
+        ])
+        grid.layoutIfNeeded()
+
+        XCTAssertTrue(keyboard.superview === keyboardContainer)
+        XCTAssertEqual(content.superview!.frame.height, 215, accuracy: 0.001)
+        XCTAssertEqual(keyboardContainer!.frame.minY, 225, accuracy: 0.001)
+        XCTAssertEqual(keyboardContainer!.frame.height, 75, accuracy: 0.001)
+        XCTAssertFalse(keyboardContainer!.isHidden)
+    }
+
     private func makeGrid(
         size: CGSize,
         rowSpacing: CGFloat = 0,

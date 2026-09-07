@@ -115,6 +115,7 @@ struct ControlGridCell {
 struct ControlGridRow {
     var cells: [ControlGridCell]
     var spec: RowSpec?  // nil = use grid's defaultRowSpec
+    var isHidden: Bool  // collapses the row while retaining its cell containers
 }
 ```
 
@@ -184,6 +185,10 @@ grid.setRows([
 Fractional items are allocated from the complete available axis. Fixed and fractional items are
 reserved first; weighted and regular flexible items then divide the remainder. A regular flexible
 item has weight 1. Negative fractions and non-positive weights receive zero unconstrained space.
+
+Set a row's `isHidden` flag to collapse it without consuming height or spacing. Its cell containers
+stay attached, so changing the flag inside a `UIView` animation animates from the collapsed row
+position instead of recreating content at the grid's origin.
 
 ### Fixed-width cells with a spacer
 
