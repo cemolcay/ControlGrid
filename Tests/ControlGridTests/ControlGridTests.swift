@@ -125,6 +125,37 @@ final class ControlGridTests: XCTestCase {
         XCTAssertFalse(keyboardContainer!.isHidden)
     }
 
+    func testHiddenCellCollapsesWithoutRemovingItsContainerOrLeavingSpacing() {
+        let first = UIView()
+        let alternate = UIView()
+        let last = UIView()
+        let grid = makeGrid(size: CGSize(width: 210, height: 100), cellSpacing: 10)
+        grid.setRows([
+            ControlGridRow(cells: [
+                ControlGridCell(view: first),
+                ControlGridCell(view: alternate, isHidden: true),
+                ControlGridCell(view: last),
+            ])
+        ])
+        grid.layoutIfNeeded()
+        let alternateContainer = alternate.superview
+
+        XCTAssertEqual(first.superview!.frame.width, 100, accuracy: 0.001)
+        XCTAssertEqual(alternateContainer!.frame.width, 0, accuracy: 0.001)
+        XCTAssertEqual(last.superview!.frame.width, 100, accuracy: 0.001)
+        XCTAssertTrue(alternateContainer!.isHidden)
+
+        grid.setCellHidden(false, atRow: 0, column: 1)
+        grid.setCellHidden(true, atRow: 0, column: 0)
+        grid.layoutIfNeeded()
+
+        XCTAssertTrue(alternate.superview === alternateContainer)
+        XCTAssertEqual(alternateContainer!.frame.width, 100, accuracy: 0.001)
+        XCTAssertEqual(last.superview!.frame.width, 100, accuracy: 0.001)
+        XCTAssertFalse(alternateContainer!.isHidden)
+        XCTAssertEqual(grid.contentViews, [first, alternate, last])
+    }
+
     private func makeGrid(
         size: CGSize,
         rowSpacing: CGFloat = 0,

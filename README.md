@@ -106,6 +106,7 @@ struct CellSpec {
 struct ControlGridCell {
     var view: UIView?    // nil = spacer (occupies space, renders nothing)
     var spec: CellSpec?  // nil = use row/grid defaults
+    var isHidden: Bool   // collapses the cell while retaining its container
 }
 ```
 
@@ -189,6 +190,10 @@ item has weight 1. Negative fractions and non-positive weights receive zero unco
 Set a row's `isHidden` flag to collapse it without consuming height or spacing. Its cell containers
 stay attached, so changing the flag inside a `UIView` animation animates from the collapsed row
 position instead of recreating content at the grid's origin.
+
+Cells support the same behavior through `isHidden`. Use `setRowHidden(_:at:)` and
+`setCellHidden(_:atRow:column:)` to update existing layouts without rebuilding them.
+`contentViews` returns configured views in row-major order, including collapsed content.
 
 ### Fixed-width cells with a spacer
 

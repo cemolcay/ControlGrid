@@ -180,10 +180,14 @@ public struct ControlGridCell {
     public var view: UIView?
     /// Per-cell layout overrides. Nil uses the parent row/grid defaults.
     public var spec: CellSpec?
+    /// When true, the cell consumes no width or adjacent cell spacing, while its container stays
+    /// attached so showing it again can animate from its collapsed position.
+    public var isHidden: Bool
 
-    public init(view: UIView? = nil, spec: CellSpec? = nil) {
+    public init(view: UIView? = nil, spec: CellSpec? = nil, isHidden: Bool = false) {
         self.view = view
         self.spec = spec
+        self.isHidden = isHidden
     }
 }
 
@@ -365,6 +369,27 @@ public class ControlGrid: UIScrollView {
         setNeedsLayout()
     }
 
+    /// Content views in row-major order. Hidden rows and cells remain present.
+    public var contentViews: [UIView] {
+        rows.flatMap(\.cells).compactMap(\.view)
+    }
+
+    /// Collapses or reveals one existing row without rebuilding its cell containers.
+    public func setRowHidden(_ isHidden: Bool, at index: Int) {
+        guard rows.indices.contains(index), rows[index].isHidden != isHidden else { return }
+        rows[index].isHidden = isHidden
+        setNeedsLayout()
+    }
+
+    /// Collapses or reveals one existing cell without rebuilding its container.
+    public func setCellHidden(_ isHidden: Bool, atRow rowIndex: Int, column: Int) {
+        guard rows.indices.contains(rowIndex),
+              rows[rowIndex].cells.indices.contains(column),
+              rows[rowIndex].cells[column].isHidden != isHidden else { return }
+        rows[rowIndex].cells[column].isHidden = isHidden
+        setNeedsLayout()
+    }
+
     // MARK: Layout
 
     override public func layoutSubviews() {
@@ -427,20 +452,24 @@ public class ControlGrid: UIScrollView {
             let rowSpec = row.spec ?? defaultRowSpec
             let rowH = rowHeights[rowIndex]
             let cellSpacing = rowSpec.cellSpacing ?? defaultCellSpacing
-            let cellCount = row.cells.count
-
-            let cellDimensions = row.cells.map { cell -> GridDimension in
-                cell.spec?.width ?? rowSpec.defaultCellWidth
+            let visibleCellIndices = row.cells.indices.filter { !row.cells[$0].isHidden }
+            let visibleCellDimensions = visibleCellIndices.map { index -> GridDimension in
+                let cell = row.cells[index]
+                return cell.spec?.width ?? rowSpec.defaultCellWidth
             }
 
-            let (cellWidths, _) = distributeSizes(
+            let (visibleCellWidths, _) = distributeSizes(
                 availableSpace: availableWidth,
-                dimensions: cellDimensions,
+                dimensions: visibleCellDimensions,
                 spacing: cellSpacing,
                 proportionalShrink: true
             )
+            var cellWidths = [CGFloat](repeating: 0, count: row.cells.count)
+            for (visibleIndex, cellIndex) in visibleCellIndices.enumerated() {
+                cellWidths[cellIndex] = visibleCellWidths[visibleIndex]
+            }
 
-            let totalCellSpacing = CGFloat(max(0, cellCount - 1)) * cellSpacing
+            let totalCellSpacing = CGFloat(max(0, visibleCellIndices.count - 1)) * cellSpacing
             let totalCellWidth = cellWidths.reduce(0, +) + totalCellSpacing
 
             var xOffset: CGFloat = 0
@@ -454,10 +483,15 @@ public class ControlGrid: UIScrollView {
 
             var currentX = xOffset
             for (colIndex, container) in (cellContainers[rowIndex]).enumerated() {
+                let cellIsHidden = row.cells[colIndex].isHidden
                 let w = cellWidths[colIndex]
-                container.isHidden = rowIsHidden
+                container.isHidden = rowIsHidden || cellIsHidden
                 container.frame = CGRect(x: currentX, y: currentY, width: w, height: rowH)
-                currentX += w + cellSpacing
+                guard !cellIsHidden else { continue }
+                currentX += w
+                if colIndex != visibleCellIndices.last {
+                    currentX += cellSpacing
+                }
             }
 
             guard !rowIsHidden else { continue }
