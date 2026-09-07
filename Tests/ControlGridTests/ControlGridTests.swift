@@ -145,8 +145,9 @@ final class ControlGridTests: XCTestCase {
         XCTAssertEqual(last.superview!.frame.width, 100, accuracy: 0.001)
         XCTAssertTrue(alternateContainer!.isHidden)
 
-        grid.setCellHidden(false, atRow: 0, column: 1)
-        grid.setCellHidden(true, atRow: 0, column: 0)
+        XCTAssertTrue(grid.setCellHidden(false, containing: alternate))
+        XCTAssertTrue(grid.setCellHidden(true, containing: first))
+        XCTAssertFalse(grid.setCellHidden(true, containing: UIView()))
         grid.layoutIfNeeded()
 
         XCTAssertTrue(alternate.superview === alternateContainer)

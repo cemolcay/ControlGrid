@@ -390,6 +390,20 @@ public class ControlGrid: UIScrollView {
         setNeedsLayout()
     }
 
+    /// Collapses or reveals the cell containing `view`, regardless of its current row or column.
+    /// This keeps callers independent from row ordering when grids are recomposed.
+    @discardableResult
+    public func setCellHidden(_ isHidden: Bool, containing view: UIView) -> Bool {
+        for rowIndex in rows.indices {
+            guard let column = rows[rowIndex].cells.firstIndex(where: { $0.view === view }) else {
+                continue
+            }
+            setCellHidden(isHidden, atRow: rowIndex, column: column)
+            return true
+        }
+        return false
+    }
+
     // MARK: Layout
 
     override public func layoutSubviews() {

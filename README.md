@@ -191,8 +191,9 @@ Set a row's `isHidden` flag to collapse it without consuming height or spacing. 
 stay attached, so changing the flag inside a `UIView` animation animates from the collapsed row
 position instead of recreating content at the grid's origin.
 
-Cells support the same behavior through `isHidden`. Use `setRowHidden(_:at:)` and
-`setCellHidden(_:atRow:column:)` to update existing layouts without rebuilding them.
+Cells support the same behavior through `isHidden`. Use `setRowHidden(_:at:)`,
+`setCellHidden(_:atRow:column:)`, or `setCellHidden(_:containing:)` to update existing layouts
+without rebuilding them. The view-based overload keeps callers independent from row ordering.
 `contentViews` returns configured views in row-major order, including collapsed content.
 
 ### Fixed-width cells with a spacer
