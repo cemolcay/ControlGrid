@@ -8,7 +8,7 @@ A generic 2D grid layout component for UIKit, built on `UIScrollView` with fully
 
 ## Features
 
-- **Per-row height specs** — fixed, flexible with min/max clamping, or unconstrained equal share
+- **Per-row height specs** — fixed, fractional, weighted, or flexible with min/max clamping
 - **Per-cell width specs** — same model applied to the horizontal axis
 - **Symmetric axes** — `GridDimension` drives both row heights and cell widths
 - **Vertical scrolling** — automatically enabled when content exceeds bounds
@@ -64,12 +64,16 @@ Used for both row heights and cell widths.
 enum GridDimension {
     case fixed(CGFloat)                          // exact size in points
     case flexible(min: CGFloat?, max: CGFloat?)  // share of remaining space, clamped
+    case weighted(CGFloat, min: CGFloat?, max: CGFloat?) // proportional remaining-space share
+    case fraction(CGFloat)                       // fraction of the complete available axis
 }
 ```
 
 - `.fixed(80)` — always 80pt (subject to proportional shrink on horizontal overflow)
 - `.flexible(min: 40, max: 80)` — gets an equal share of remaining space, clamped to [40, 80]
 - `.flexible(min: nil, max: nil)` — unconstrained equal share (the default)
+- `.weighted(1.7)` — gets 1.7 shares of the remaining space for every share held by weight 1
+- `.fraction(0.225)` — gets 22.5% of the grid's complete width or height before spacing
 
 ### `RowSpec`
 
@@ -153,6 +157,33 @@ grid.setRows([
     ControlGridRow(cells: [e, f, g, h].map { ControlGridCell(view: $0) }),
 ])
 ```
+
+### Fractional rows and weighted cells
+
+Keep a keyboard at 22.5% of the grid height while dividing a content row between a fixed selector,
+a scene, and controls at a 1.7:1 ratio:
+
+```swift
+grid.setRows([
+    ControlGridRow(
+        cells: [ControlGridCell(view: toolbar)],
+        spec: RowSpec(height: .fixed(34))
+    ),
+    ControlGridRow(cells: [
+        ControlGridCell(view: selector, spec: CellSpec(width: .fixed(46))),
+        ControlGridCell(view: scene, spec: CellSpec(width: .weighted(1.7))),
+        ControlGridCell(view: controls, spec: CellSpec(width: .weighted(1))),
+    ]),
+    ControlGridRow(
+        cells: [ControlGridCell(view: keyboard)],
+        spec: RowSpec(height: .fraction(0.225))
+    ),
+])
+```
+
+Fractional items are allocated from the complete available axis. Fixed and fractional items are
+reserved first; weighted and regular flexible items then divide the remainder. A regular flexible
+item has weight 1. Negative fractions and non-positive weights receive zero unconstrained space.
 
 ### Fixed-width cells with a spacer
 

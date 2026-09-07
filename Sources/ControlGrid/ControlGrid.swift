@@ -50,6 +50,18 @@
  - Horizontal (cells): Fixed cells shrink proportionally when their total
                        exceeds row width — no horizontal scrolling, no clipping.
                        e.g. two .fixed(100) cells in 150pt → each gets 75pt.
+
+ WEIGHTED + FRACTIONAL SIZING — fixed selector, 1.7:1 content split, 22.5% keyboard:
+
+     ControlGridRow(cells: [
+         ControlGridCell(view: selector, spec: CellSpec(width: .fixed(46))),
+         ControlGridCell(view: scene, spec: CellSpec(width: .weighted(1.7))),
+         ControlGridCell(view: controls, spec: CellSpec(width: .weighted(1))),
+     ])
+
+     ControlGridRow(
+         cells: [ControlGridCell(view: keyboard)],
+         spec: RowSpec(height: .fraction(0.225)))
  */
 
 import UIKit
@@ -72,6 +84,16 @@ public enum GridDimension {
     /// - `max: nil` means no maximum (takes as much space as available share).
     /// - `.flexible(min: nil, max: nil)` means "equal share, no constraints".
     case flexible(min: CGFloat?, max: CGFloat?)
+
+    /// A flexible size that receives a weighted share of the space remaining after fixed and
+    /// fractional items are allocated. A regular `flexible` item has an implicit weight of 1.
+    /// Non-positive weights receive no unconstrained share, though `min` is still respected.
+    case weighted(CGFloat, min: CGFloat? = nil, max: CGFloat? = nil)
+
+    /// A size expressed as a fraction of the grid's complete available axis before spacing is
+    /// removed. For example, `.fraction(0.25)` is one quarter of the grid's height for a row or
+    /// width for a cell. Negative fractions are treated as zero.
+    case fraction(CGFloat)
 }
 
 // MARK: - ContentAlignment
@@ -191,10 +213,21 @@ private class CellContainer: UIView {
 
     /// Replaces the current content view with `view`, pinned inside the
     /// container using the given `insets`.
-    func setContent(_ view: UIView, insets: UIEdgeInsets) {
+    func setContent(_ view: UIView?, insets: UIEdgeInsets) {
+        if contentView === view {
+            guard contentConstraints.count == 4 else { return }
+            contentConstraints[0].constant = insets.left
+            contentConstraints[1].constant = -insets.right
+            contentConstraints[2].constant = insets.top
+            contentConstraints[3].constant = -insets.bottom
+            return
+        }
+
         contentView?.removeFromSuperview()
         NSLayoutConstraint.deactivate(contentConstraints)
         contentView = view
+        contentConstraints = []
+        guard let view else { return }
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view)
         contentConstraints = [
@@ -287,30 +320,44 @@ public class ControlGrid: UIScrollView {
 
     /// Replaces all current content with the given rows.
     ///
-    /// Removes existing cell containers from the view hierarchy, builds new
-    /// ones from the provided rows, then triggers a layout pass.
+    /// Retains cell containers whose content-view identity is unchanged, removes obsolete
+    /// containers, builds any new ones, then triggers a layout pass. Retaining containers keeps
+    /// live controls and scenes attached while their row or cell dimensions change.
     ///
     /// - Parameter rows: The rows to display. Each row defines its own cells
     ///   and may override the grid's `defaultRowSpec`.
     public func setRows(_ rows: [ControlGridRow]) {
-        cellContainers.flatMap { $0 }.forEach { $0.removeFromSuperview() }
-        cellContainers = []
+        var reusableContainers: [ObjectIdentifier: CellContainer] = [:]
+        for container in cellContainers.flatMap({ $0 }) {
+            if let view = container.contentView {
+                reusableContainers[ObjectIdentifier(view)] = container
+            }
+        }
+        var retainedContainers = Set<ObjectIdentifier>()
+        var newContainers: [[CellContainer]] = []
         self.rows = rows
 
         for row in rows {
             let rowSpec = row.spec ?? defaultRowSpec
             var rowCells: [CellContainer] = []
             for cell in row.cells {
-                let container = CellContainer()
+                let container = cell.view.flatMap {
+                    reusableContainers[ObjectIdentifier($0)]
+                } ?? CellContainer()
                 let insets = cell.spec?.insets ?? rowSpec.cellInsets ?? defaultCellInsets
-                if let view = cell.view {
-                    container.setContent(view, insets: insets)
+                container.setContent(cell.view, insets: insets)
+                if container.superview == nil {
+                    addSubview(container)
                 }
-                addSubview(container)
+                retainedContainers.insert(ObjectIdentifier(container))
                 rowCells.append(container)
             }
-            cellContainers.append(rowCells)
+            newContainers.append(rowCells)
         }
+        cellContainers.flatMap { $0 }
+            .filter { !retainedContainers.contains(ObjectIdentifier($0)) }
+            .forEach { $0.removeFromSuperview() }
+        cellContainers = newContainers
         setNeedsLayout()
     }
 
@@ -443,23 +490,40 @@ public class ControlGrid: UIScrollView {
         var sizes = [CGFloat](repeating: 0, count: count)
         var fixedTotal: CGFloat = 0
         var flexibleIndices: [Int] = []
+        var flexibleWeights = [CGFloat](repeating: 0, count: count)
+        var flexibleMinimums = [CGFloat?](repeating: nil, count: count)
+        var flexibleMaximums = [CGFloat?](repeating: nil, count: count)
 
         for (i, dim) in dimensions.enumerated() {
             switch dim {
             case .fixed(let h):
-                sizes[i] = h
-                fixedTotal += h
-            case .flexible:
+                sizes[i] = max(0, h)
+                fixedTotal += sizes[i]
+            case .fraction(let fraction):
+                sizes[i] = availableSpace * max(0, fraction)
+                fixedTotal += sizes[i]
+            case .flexible(let min, let max):
                 flexibleIndices.append(i)
+                flexibleWeights[i] = 1
+                flexibleMinimums[i] = min
+                flexibleMaximums[i] = max
+            case .weighted(let weight, let min, let max):
+                flexibleIndices.append(i)
+                flexibleWeights[i] = Swift.max(0, weight)
+                flexibleMinimums[i] = min
+                flexibleMaximums[i] = max
             }
         }
 
         // Handle proportional shrink for horizontal axis
-        if proportionalShrink && fixedTotal > spaceForItems && spaceForItems > 0 {
-            let ratio = spaceForItems / fixedTotal
+        if proportionalShrink && fixedTotal > spaceForItems {
+            let ratio = fixedTotal > 0 ? max(0, spaceForItems) / fixedTotal : 0
             for i in 0..<count {
-                if case .fixed = dimensions[i] {
+                switch dimensions[i] {
+                case .fixed, .fraction:
                     sizes[i] *= ratio
+                case .flexible, .weighted:
+                    break
                 }
             }
             // Flexible items get 0 (no space left after fixed items shrunk to fill)
@@ -469,20 +533,16 @@ public class ControlGrid: UIScrollView {
         // Minimum check for vertical scrolling trigger
         var minTotal: CGFloat = fixedTotal
         for i in flexibleIndices {
-            if case .flexible(let min, _) = dimensions[i] {
-                minTotal += (min ?? 0)
-            }
+            minTotal += max(0, flexibleMinimums[i] ?? 0)
         }
 
         if minTotal > spaceForItems {
             // Content doesn't fit even at minimum sizes
             var remaining = spaceForItems - fixedTotal
             for i in flexibleIndices {
-                if case .flexible(let min, _) = dimensions[i] {
-                    let allocated = min ?? 0
-                    sizes[i] = allocated
-                    remaining -= allocated
-                }
+                let allocated = max(0, flexibleMinimums[i] ?? 0)
+                sizes[i] = allocated
+                remaining -= allocated
             }
             return (sizes, !proportionalShrink)
         }
@@ -499,30 +559,37 @@ public class ControlGrid: UIScrollView {
         while changed {
             changed = false
             guard !unclamped.isEmpty else { break }
-            let sharePerItem = spaceForFlexible / CGFloat(unclamped.count)
+            let totalWeight = unclamped.reduce(CGFloat.zero) {
+                $0 + flexibleWeights[$1]
+            }
 
             for i in unclamped {
-                if case .flexible(let minH, let maxH) = dimensions[i] {
-                    if let maxH, sharePerItem > maxH {
-                        sizes[i] = maxH
-                        spaceForFlexible -= maxH
-                        unclamped.remove(i)
-                        changed = true
-                    } else if let minH, sharePerItem < minH {
-                        sizes[i] = minH
-                        spaceForFlexible -= minH
-                        unclamped.remove(i)
-                        changed = true
-                    }
+                let share = totalWeight > 0
+                    ? spaceForFlexible * flexibleWeights[i] / totalWeight
+                    : 0
+                if let maxH = flexibleMaximums[i], share > maxH {
+                    sizes[i] = max(0, maxH)
+                    spaceForFlexible -= sizes[i]
+                    unclamped.remove(i)
+                    changed = true
+                } else if let minH = flexibleMinimums[i], share < minH {
+                    sizes[i] = max(0, minH)
+                    spaceForFlexible -= sizes[i]
+                    unclamped.remove(i)
+                    changed = true
                 }
             }
         }
 
-        // Assign final share to unclamped flexible items
+        // Assign final weighted shares to unclamped flexible items.
         if !unclamped.isEmpty {
-            let finalShare = max(0, spaceForFlexible / CGFloat(unclamped.count))
+            let totalWeight = unclamped.reduce(CGFloat.zero) {
+                $0 + flexibleWeights[$1]
+            }
             for i in unclamped {
-                sizes[i] = finalShare
+                sizes[i] = totalWeight > 0
+                    ? max(0, spaceForFlexible * flexibleWeights[i] / totalWeight)
+                    : 0
             }
         }
 

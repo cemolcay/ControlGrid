@@ -18,5 +18,10 @@ let package = Package(
             name: "ControlGrid",
             path: "Sources/ControlGrid"
         ),
+        .testTarget(
+            name: "ControlGridTests",
+            dependencies: ["ControlGrid"],
+            path: "Tests/ControlGridTests"
+        ),
     ]
 )
