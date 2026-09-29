@@ -60,6 +60,48 @@ final class ControlGridTests: XCTestCase {
         XCTAssertEqual(second.superview!.frame.width, 284, accuracy: 0.001)
     }
 
+    /// Clamping one row to its maximum must not push a later row down to its minimum: every share
+    /// in a pass comes from the same space and weight.
+    func testWeightedMaximumsDoNotForceOtherRowsToTheirMinimums() {
+        let button = UIView()
+        let knobs = UIView()
+        let wide = UIView()
+        let common = UIView()
+        let grid = makeGrid(size: CGSize(width: 320, height: 290), rowSpacing: 8)
+
+        grid.setRows([
+            row(button, height: .fixed(40)),
+            row(knobs, height: .weighted(2, min: 56, max: 88)),
+            row(wide, height: .weighted(1, min: 28)),
+            row(common, height: .weighted(2, min: 56, max: 88)),
+        ])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(knobs.superview!.frame.height, 88, accuracy: 0.001)
+        XCTAssertEqual(common.superview!.frame.height, 88, accuracy: 0.001)
+        XCTAssertEqual(wide.superview!.frame.height, 50, accuracy: 0.001)
+    }
+
+    func testWeightedMinimumTakesSpaceFromTheOthers() {
+        let first = UIView()
+        let second = UIView()
+        let third = UIView()
+        let grid = makeGrid(size: CGSize(width: 300, height: 100))
+
+        grid.setRows([
+            ControlGridRow(cells: [
+                ControlGridCell(view: first, spec: CellSpec(width: .weighted(1, min: 150))),
+                ControlGridCell(view: second, spec: CellSpec(width: .weighted(1))),
+                ControlGridCell(view: third, spec: CellSpec(width: .weighted(1))),
+            ])
+        ])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(first.superview!.frame.width, 150, accuracy: 0.001)
+        XCTAssertEqual(second.superview!.frame.width, 75, accuracy: 0.001)
+        XCTAssertEqual(third.superview!.frame.width, 75, accuracy: 0.001)
+    }
+
     func testLegacyFlexibleCellsStillReceiveEqualShares() {
         let first = UIView()
         let second = UIView()

@@ -614,34 +614,34 @@ public class ControlGrid: UIScrollView {
             return (sizes, fixedTotal > spaceForItems)
         }
 
-        // Iterative clamping: distribute remaining space to flexible items
-        var unclamped = Set(flexibleIndices)
+        // Iterative clamping. Each pass computes every share from the same space and weight, then
+        // clamps: maximums first (freeing space only raises the other shares), minimums only when
+        // no share is over its maximum. Index order keeps the result deterministic.
+        var unclamped = flexibleIndices
         var spaceForFlexible = spaceForItems - fixedTotal
-        var changed = true
 
-        while changed {
-            changed = false
-            guard !unclamped.isEmpty else { break }
+        while !unclamped.isEmpty {
             let totalWeight = unclamped.reduce(CGFloat.zero) {
                 $0 + flexibleWeights[$1]
             }
-
-            for i in unclamped {
-                let share = totalWeight > 0
-                    ? spaceForFlexible * flexibleWeights[i] / totalWeight
-                    : 0
-                if let maxH = flexibleMaximums[i], share > maxH {
-                    sizes[i] = max(0, maxH)
-                    spaceForFlexible -= sizes[i]
-                    unclamped.remove(i)
-                    changed = true
-                } else if let minH = flexibleMinimums[i], share < minH {
-                    sizes[i] = max(0, minH)
-                    spaceForFlexible -= sizes[i]
-                    unclamped.remove(i)
-                    changed = true
+            let share: (Int) -> CGFloat = { i in
+                totalWeight > 0 ? spaceForFlexible * flexibleWeights[i] / totalWeight : 0
+            }
+            var clamped = unclamped.filter { i in
+                flexibleMaximums[i].map { share(i) > $0 } ?? false
+            }
+            let clampsMaximums = !clamped.isEmpty
+            if !clampsMaximums {
+                clamped = unclamped.filter { i in
+                    flexibleMinimums[i].map { share(i) < $0 } ?? false
                 }
             }
+            guard !clamped.isEmpty else { break }
+            for i in clamped {
+                sizes[i] = max(0, (clampsMaximums ? flexibleMaximums[i] : flexibleMinimums[i]) ?? 0)
+                spaceForFlexible -= sizes[i]
+            }
+            unclamped.removeAll { clamped.contains($0) }
         }
 
         // Assign final weighted shares to unclamped flexible items.
