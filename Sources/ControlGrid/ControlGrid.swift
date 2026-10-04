@@ -543,11 +543,8 @@ public class ControlGrid: UIScrollView {
             ? CGSize(width: proposed.width == CGFloat.greatestFiniteMagnitude
                 ? view.bounds.width : proposed.width, height: .infinity) : proposed)
         let intrinsic = view.intrinsicContentSize
-        let needsAutoLayout = !(view is ControlGrid) &&
-            (measured.width <= 0 || !measured.width.isFinite ||
-             measured.height <= 0 || !measured.height.isFinite)
         let autoLayout: CGSize
-        if needsAutoLayout {
+        if !(view is ControlGrid) {
             if proposed.width < CGFloat.greatestFiniteMagnitude {
                 autoLayout = view.systemLayoutSizeFitting(
                     CGSize(width: proposed.width, height: UIView.layoutFittingCompressedSize.height),
@@ -559,10 +556,14 @@ public class ControlGrid: UIScrollView {
         } else {
             autoLayout = .zero
         }
-        let width = measured.width.isFinite && measured.width > 0 ? measured.width
-            : Swift.max(0, intrinsic.width, autoLayout.width)
-        let height = measured.height.isFinite && measured.height > 0 ? measured.height
-            : Swift.max(0, intrinsic.height, autoLayout.height)
+        // UIView's default sizeThatFits returns its current bounds. Prefer a positive Auto
+        // Layout result so a changed constraint cannot leave fitting rows at their old size.
+        let width = autoLayout.width.isFinite && autoLayout.width > 0 ? autoLayout.width
+            : (measured.width.isFinite && measured.width > 0 ? measured.width
+                : Swift.max(0, intrinsic.width))
+        let height = autoLayout.height.isFinite && autoLayout.height > 0 ? autoLayout.height
+            : (measured.height.isFinite && measured.height > 0 ? measured.height
+                : Swift.max(0, intrinsic.height))
         return CGSize(width: width, height: height)
     }
 

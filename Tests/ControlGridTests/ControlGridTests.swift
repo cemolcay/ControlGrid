@@ -249,6 +249,21 @@ final class ControlGridTests: XCTestCase {
         XCTAssertEqual(content.superview!.frame.height, 64, accuracy: 0.001)
     }
 
+    func testFittingRowTracksChangedAutoLayoutHeight() {
+        let content = UIView()
+        let height = content.heightAnchor.constraint(equalToConstant: 64)
+        height.isActive = true
+        let grid = makeGrid(size: CGSize(width: 200, height: 200))
+        grid.setRows([row(content, height: .fitting())])
+        grid.layoutIfNeeded()
+
+        height.constant = 80
+        grid.setNeedsLayout()
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(content.superview!.frame.height, 80, accuracy: 0.001)
+    }
+
     func testFittingParentCanMeasureNestedGrid() {
         let child = makeGrid(size: .zero)
         child.setRows([row(UIView(), height: .fixed(70))])
