@@ -12,7 +12,8 @@ A generic 2D grid layout component for UIKit, built on `UIScrollView` with fully
 - **Per-cell width specs** — same model applied to the horizontal axis
 - **Symmetric axes** — `GridDimension` drives both row heights and cell widths
 - **Vertical scrolling** — automatically enabled when content exceeds bounds
-- **Proportional horizontal shrink** — fixed cells shrink together when they overflow their row
+- **Proportional horizontal shrink** — declared widths and minimums compress together when they overflow their row
+- **Content fitting** — opt into a content view's fitting width or a row's tallest fitting height
 - **Content alignment** — top, center, or bottom when content is smaller than bounds
 - **Cell alignment per row** — leading, center, or trailing
 - **Spacer cells** — pass `view: nil` for a cell that occupies space but renders nothing
@@ -66,6 +67,7 @@ enum GridDimension {
     case flexible(min: CGFloat?, max: CGFloat?)  // share of remaining space, clamped
     case weighted(CGFloat, min: CGFloat?, max: CGFloat?) // proportional remaining-space share
     case fraction(CGFloat)                       // fraction of the complete available axis
+    case fitting(min: CGFloat?, max: CGFloat?)   // content's fitting size, with optional bounds
 }
 ```
 
@@ -74,6 +76,13 @@ enum GridDimension {
 - `.flexible(min: nil, max: nil)` — unconstrained equal share (the default)
 - `.weighted(1.7)` — gets 1.7 shares of the remaining space for every share held by weight 1
 - `.fraction(0.225)` — gets 22.5% of the grid's complete width or height before spacing
+- `.fitting(min: 44)` — uses the content's fitting width, or the tallest cell's fitting height
+
+Fitting is opt in and uses `sizeThatFits`, intrinsic size, or Auto Layout fitting size. Flexible
+items do not inspect their content; give interactive rows a minimum height if they must remain
+usable on a short screen. A nested `ControlGrid` reports the sum of its
+fixed, fitting, and flexible minimum row heights to a fitting parent row. Fractional rows have no
+intrinsic height when measured without a proposed height.
 
 ### `RowSpec`
 
@@ -187,6 +196,22 @@ Fractional items are allocated from the complete available axis. Fixed and fract
 reserved first; weighted and regular flexible items then divide the remainder. A regular flexible
 item has weight 1. Negative fractions and non-positive weights receive zero unconstrained space.
 
+### Content-sized header with a scrolling body
+
+```swift
+grid.setRows([
+    ControlGridRow(
+        cells: [ControlGridCell(view: headerLabel, spec: CellSpec(width: .fitting()))],
+        spec: RowSpec(height: .fitting(min: 44), horizontalAlignment: .leading)),
+    ControlGridRow(
+        cells: [ControlGridCell(view: controls)],
+        spec: RowSpec(height: .flexible(min: 180, max: nil))),
+])
+```
+
+The header follows its content's fitting height. If the viewport cannot hold the header, body
+minimum, and row spacing, the grid scrolls vertically.
+
 Set a row's `isHidden` flag to collapse it without consuming height or spacing. Its cell containers
 stay attached, so changing the flag inside a `UIView` animation animates from the collapsed row
 position instead of recreating content at the grid's origin.
@@ -265,9 +290,10 @@ ControlGridRow(
 | Axis | Behavior when content exceeds bounds |
 |---|---|
 | **Vertical (rows)** | Grid scrolls. Rows keep their declared or minimum heights. |
-| **Horizontal (cells)** | Fixed cells shrink proportionally. No horizontal scroll. No clipping. |
+| **Horizontal (cells)** | Spacing reduces first, then declared widths and minimums shrink proportionally. No horizontal scroll. |
 
-Example: two `.fixed(100)` cells in a 150pt row → each becomes 75pt.
+Example: two `.fixed(100)` cells in a 150pt row → spacing reduces to zero and each cell becomes 75pt.
+Content inside a compressed cell may still need its own text scaling or truncation rules.
 
 ---
 

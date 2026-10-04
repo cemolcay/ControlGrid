@@ -47,8 +47,8 @@
  OVERFLOW BEHAVIOR:
  - Vertical (rows):    If total row heights exceed grid height, the grid scrolls.
                        Rows always keep their declared/minimum heights.
- - Horizontal (cells): Fixed cells shrink proportionally when their total
-                       exceeds row width — no horizontal scrolling, no clipping.
+ - Horizontal (cells): Spacing reduces first, then declared widths and
+                       minimums shrink proportionally — no horizontal scrolling.
                        e.g. two .fixed(100) cells in 150pt → each gets 75pt.
 
  WEIGHTED + FRACTIONAL SIZING — fixed selector, 1.7:1 content split, 22.5% keyboard:
@@ -73,7 +73,7 @@ import UIKit
 /// Both the vertical (row height) and horizontal (cell width) axes use this
 /// same type, giving the grid symmetric configuration on both dimensions.
 public enum GridDimension {
-    /// An exact size in points. Proportionally shrinks when total fixed sizes
+    /// An exact size in points. Proportionally shrinks when declared sizes
     /// exceed available space (horizontal axis only; vertical scrolls instead).
     case fixed(CGFloat)
 
@@ -89,6 +89,10 @@ public enum GridDimension {
     /// fractional items are allocated. A regular `flexible` item has an implicit weight of 1.
     /// Non-positive weights receive no unconstrained share, though `min` is still respected.
     case weighted(CGFloat, min: CGFloat? = nil, max: CGFloat? = nil)
+
+    /// Uses the content view's fitting size on this axis, subject to optional bounds.
+    /// For a row, the tallest visible cell determines the fitting height.
+    case fitting(min: CGFloat? = nil, max: CGFloat? = nil)
 
     /// A size expressed as a fraction of the grid's complete available axis before spacing is
     /// removed. For example, `.fraction(0.25)` is one quarter of the grid's height for a row or
@@ -260,26 +264,27 @@ private class CellContainer: UIView {
 /// Cell positioning within a row (horizontal) is controlled by `HorizontalAlignment`.
 ///
 /// The grid scrolls vertically when total content height exceeds bounds.
-/// Horizontal overflow is handled by proportional shrinking of fixed cells.
+/// Horizontal overflow is handled by reducing spacing, then proportionally
+/// shrinking declared cell widths and minimums.
 public class ControlGrid: UIScrollView {
 
     // MARK: Configuration
 
     /// Grid-level fallback spec applied to any row whose `spec` is `nil`.
-    public var defaultRowSpec: RowSpec
+    public var defaultRowSpec: RowSpec { didSet { refreshCellInsets(); setNeedsLayout() } }
 
     /// Vertical spacing between rows in points.
-    public var rowSpacing: CGFloat
+    public var rowSpacing: CGFloat { didSet { setNeedsLayout() } }
 
     /// How rows are vertically positioned when total content height < bounds.
-    public var contentAlignment: ContentAlignment
+    public var contentAlignment: ContentAlignment { didSet { setNeedsLayout() } }
 
     /// Horizontal spacing between cells, used when `RowSpec.cellSpacing` is nil.
-    public var defaultCellSpacing: CGFloat
+    public var defaultCellSpacing: CGFloat { didSet { setNeedsLayout() } }
 
     /// Cell insets used when neither `CellSpec.insets` nor `RowSpec.cellInsets`
     /// is set.
-    public var defaultCellInsets: UIEdgeInsets
+    public var defaultCellInsets: UIEdgeInsets { didSet { refreshCellInsets(); setNeedsLayout() } }
 
     // MARK: Private State
 
@@ -335,6 +340,9 @@ public class ControlGrid: UIScrollView {
     /// - Parameter rows: The rows to display. Each row defines its own cells
     ///   and may override the grid's `defaultRowSpec`.
     public func setRows(_ rows: [ControlGridRow]) {
+        let views = rows.flatMap(\.cells).compactMap(\.view)
+        assert(Set(views.map(ObjectIdentifier.init)).count == views.count,
+               "A content view may appear in only one ControlGrid cell")
         var reusableContainers: [ObjectIdentifier: CellContainer] = [:]
         for container in cellContainers.flatMap({ $0 }) {
             if let view = container.contentView {
@@ -367,6 +375,16 @@ public class ControlGrid: UIScrollView {
             .forEach { $0.removeFromSuperview() }
         cellContainers = newContainers
         setNeedsLayout()
+    }
+
+    private func refreshCellInsets() {
+        for (rowIndex, row) in rows.enumerated() {
+            let rowSpec = row.spec ?? defaultRowSpec
+            for (cellIndex, cell) in row.cells.enumerated() {
+                let insets = cell.spec?.insets ?? rowSpec.cellInsets ?? defaultCellInsets
+                cellContainers[rowIndex][cellIndex].setContent(cell.view, insets: insets)
+            }
+        }
     }
 
     /// Content views in row-major order. Hidden rows and cells remain present.
@@ -411,6 +429,8 @@ public class ControlGrid: UIScrollView {
         guard bounds.width > 0, bounds.height > 0 else { return }
         guard !rows.isEmpty else {
             contentSize = .zero
+            isScrollEnabled = false
+            alwaysBounceVertical = false
             return
         }
         performLayout()
@@ -418,20 +438,26 @@ public class ControlGrid: UIScrollView {
 
     /// Computes and applies all row and cell frames.
     ///
-    /// Two-pass layout:
-    /// 1. **Vertical pass** — resolves each row's height using `distributeSizes`.
-    ///    Determines whether vertical scrolling is needed.
-    /// 2. **Horizontal pass** — for each row, resolves cell widths independently
-    ///    using `distributeSizes`. Applies horizontal alignment offset.
+    /// Widths are resolved first so fitting rows can measure their content at the actual cell
+    /// width. Heights are then distributed, followed by frame assignment and alignment.
     private func performLayout() {
         let availableWidth = bounds.width
         let availableHeight = bounds.height
         let rowCount = rows.count
 
+        // Cell widths must be known before a fitting row can measure its content height.
+        let horizontal = rows.map { horizontalLayout(for: $0, availableWidth: availableWidth) }
+
         // --- Vertical pass ---
         let rowSpecs = rows.map { $0.spec ?? defaultRowSpec }
         let visibleRowIndices = rows.indices.filter { !rows[$0].isHidden }
-        let visibleRowDimensions = visibleRowIndices.map { rowSpecs[$0].height }
+        let visibleRowDimensions = visibleRowIndices.map { index -> GridDimension in
+            if case .fitting(let min, let max) = rowSpecs[index].height {
+                let height = fittingRowHeight(at: index, cellWidths: horizontal[index].widths)
+                return .fixed(clamp(height, min: min, max: max))
+            }
+            return rowSpecs[index].height
+        }
         let (visibleRowHeights, needsScrolling) = distributeSizes(
             availableSpace: availableHeight,
             dimensions: visibleRowDimensions,
@@ -459,29 +485,15 @@ public class ControlGrid: UIScrollView {
             }
         }
 
-        // --- Horizontal pass + frame assignment ---
+        // --- Frame assignment ---
         var currentY = yOffset
         for (rowIndex, row) in rows.enumerated() {
             let rowIsHidden = row.isHidden
             let rowSpec = row.spec ?? defaultRowSpec
             let rowH = rowHeights[rowIndex]
-            let cellSpacing = rowSpec.cellSpacing ?? defaultCellSpacing
+            let cellSpacing = horizontal[rowIndex].spacing
             let visibleCellIndices = row.cells.indices.filter { !row.cells[$0].isHidden }
-            let visibleCellDimensions = visibleCellIndices.map { index -> GridDimension in
-                let cell = row.cells[index]
-                return cell.spec?.width ?? rowSpec.defaultCellWidth
-            }
-
-            let (visibleCellWidths, _) = distributeSizes(
-                availableSpace: availableWidth,
-                dimensions: visibleCellDimensions,
-                spacing: cellSpacing,
-                proportionalShrink: true
-            )
-            var cellWidths = [CGFloat](repeating: 0, count: row.cells.count)
-            for (visibleIndex, cellIndex) in visibleCellIndices.enumerated() {
-                cellWidths[cellIndex] = visibleCellWidths[visibleIndex]
-            }
+            let cellWidths = horizontal[rowIndex].widths
 
             let totalCellSpacing = CGFloat(max(0, visibleCellIndices.count - 1)) * cellSpacing
             let totalCellWidth = cellWidths.reduce(0, +) + totalCellSpacing
@@ -489,9 +501,11 @@ public class ControlGrid: UIScrollView {
             var xOffset: CGFloat = 0
             if totalCellWidth < availableWidth {
                 switch rowSpec.horizontalAlignment {
-                case .leading:  xOffset = 0
+                case .leading:  xOffset = effectiveUserInterfaceLayoutDirection == .rightToLeft
+                    ? availableWidth - totalCellWidth : 0
                 case .center:   xOffset = (availableWidth - totalCellWidth) / 2
-                case .trailing: xOffset = availableWidth - totalCellWidth
+                case .trailing: xOffset = effectiveUserInterfaceLayoutDirection == .rightToLeft
+                    ? 0 : availableWidth - totalCellWidth
                 }
             }
 
@@ -516,6 +530,120 @@ public class ControlGrid: UIScrollView {
         }
     }
 
+    private func clamp(_ value: CGFloat, min minimum: CGFloat?, max maximum: CGFloat?) -> CGFloat {
+        Swift.max(0, Swift.min(maximum ?? .greatestFiniteMagnitude,
+                              Swift.max(minimum ?? 0, value)))
+    }
+
+    private func fittingSize(of view: UIView?, proposed: CGSize) -> CGSize {
+        guard let view else { return .zero }
+        // A nested grid can derive its minimum height from its own rows. Its fractional rows
+        // have no intrinsic height when the parent is measuring an unbounded vertical axis.
+        let measured = view.sizeThatFits(view is ControlGrid
+            ? CGSize(width: proposed.width == CGFloat.greatestFiniteMagnitude
+                ? view.bounds.width : proposed.width, height: .infinity) : proposed)
+        let intrinsic = view.intrinsicContentSize
+        let needsAutoLayout = !(view is ControlGrid) &&
+            (measured.width <= 0 || !measured.width.isFinite ||
+             measured.height <= 0 || !measured.height.isFinite)
+        let autoLayout: CGSize
+        if needsAutoLayout {
+            if proposed.width < CGFloat.greatestFiniteMagnitude {
+                autoLayout = view.systemLayoutSizeFitting(
+                    CGSize(width: proposed.width, height: UIView.layoutFittingCompressedSize.height),
+                    withHorizontalFittingPriority: .required,
+                    verticalFittingPriority: .fittingSizeLevel)
+            } else {
+                autoLayout = view.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+            }
+        } else {
+            autoLayout = .zero
+        }
+        let width = measured.width.isFinite && measured.width > 0 ? measured.width
+            : Swift.max(0, intrinsic.width, autoLayout.width)
+        let height = measured.height.isFinite && measured.height > 0 ? measured.height
+            : Swift.max(0, intrinsic.height, autoLayout.height)
+        return CGSize(width: width, height: height)
+    }
+
+    private func horizontalLayout(for row: ControlGridRow, availableWidth: CGFloat)
+        -> (widths: [CGFloat], spacing: CGFloat) {
+        let rowSpec = row.spec ?? defaultRowSpec
+        let visibleIndices = row.cells.indices.filter { !row.cells[$0].isHidden }
+        let dimensions = visibleIndices.map { index -> GridDimension in
+            let cell = row.cells[index]
+            let dimension = cell.spec?.width ?? rowSpec.defaultCellWidth
+            if case .fitting(let min, let max) = dimension {
+                let insets = cell.spec?.insets ?? rowSpec.cellInsets ?? defaultCellInsets
+                let fitting = fittingSize(of: cell.view,
+                                          proposed: CGSize(width: CGFloat.greatestFiniteMagnitude,
+                                                           height: CGFloat.greatestFiniteMagnitude)).width
+                return .fixed(clamp(fitting + insets.left + insets.right, min: min, max: max))
+            }
+            return dimension
+        }
+        let gaps = Swift.max(0, visibleIndices.count - 1)
+        let configuredSpacing = Swift.max(0, rowSpec.cellSpacing ?? defaultCellSpacing)
+        // Spacing cannot consume more than the viewport. When minimum widths overflow, give
+        // the cells the available space before proportionally compressing their widths.
+        let minimumTotal = dimensions.reduce(CGFloat.zero) { total, dimension in
+            switch dimension {
+            case .fixed(let value): return total + Swift.max(0, value)
+            case .fraction(let value): return total + availableWidth * Swift.max(0, value)
+            case .flexible(let min, _), .weighted(_, let min, _):
+                return total + Swift.max(0, min ?? 0)
+            case .fitting: return total
+            }
+        }
+        let spacing = gaps > 0
+            ? Swift.min(configuredSpacing, Swift.max(0, availableWidth - minimumTotal) / CGFloat(gaps))
+            : 0
+        let (visibleWidths, _) = distributeSizes(availableSpace: availableWidth,
+                                                 dimensions: dimensions,
+                                                 spacing: spacing,
+                                                 proportionalShrink: true)
+        var widths = [CGFloat](repeating: 0, count: row.cells.count)
+        for (offset, index) in visibleIndices.enumerated() { widths[index] = visibleWidths[offset] }
+        return (widths, spacing)
+    }
+
+    private func fittingRowHeight(at index: Int, cellWidths: [CGFloat]) -> CGFloat {
+        let row = rows[index]
+        let rowSpec = row.spec ?? defaultRowSpec
+        return row.cells.indices.filter { !row.cells[$0].isHidden }.reduce(CGFloat.zero) { height, cellIndex in
+            let cell = row.cells[cellIndex]
+            let insets = cell.spec?.insets ?? rowSpec.cellInsets ?? defaultCellInsets
+            let proposedWidth = Swift.max(0, cellWidths[cellIndex] - insets.left - insets.right)
+            let fitting = fittingSize(of: cell.view,
+                                      proposed: CGSize(width: proposedWidth,
+                                                       height: CGFloat.greatestFiniteMagnitude)).height
+            return Swift.max(height, fitting + insets.top + insets.bottom)
+        }
+    }
+
+    override public func sizeThatFits(_ size: CGSize) -> CGSize {
+        let width = size.width.isFinite ? Swift.max(0, size.width) : bounds.width
+        let visibleRows = rows.indices.filter { !rows[$0].isHidden }
+        let height = visibleRows.reduce(CGFloat(Swift.max(0, visibleRows.count - 1)) * Swift.max(0, rowSpacing)) {
+            total, index in
+            let dimension = (rows[index].spec ?? defaultRowSpec).height
+            let rowHeight: CGFloat
+            switch dimension {
+            case .fixed(let value): rowHeight = Swift.max(0, value)
+            case .fraction(let value):
+                rowHeight = size.height.isFinite ? Swift.max(0, value * size.height) : 0
+            case .flexible(let min, _), .weighted(_, let min, _):
+                rowHeight = Swift.max(0, min ?? 0)
+            case .fitting(let min, let max):
+                rowHeight = clamp(fittingRowHeight(at: index,
+                    cellWidths: horizontalLayout(for: rows[index], availableWidth: width).widths),
+                    min: min, max: max)
+            }
+            return total + rowHeight
+        }
+        return CGSize(width: width, height: height)
+    }
+
     /// Distributes `availableSpace` across items described by `dimensions`,
     /// separated by `spacing`.
     ///
@@ -527,15 +655,15 @@ public class ControlGrid: UIScrollView {
     /// Overflow handling:
     /// - `proportionalShrink: false` (rows): sets `needsScrolling = true`
     ///   when fixed minimums exceed available space.
-    /// - `proportionalShrink: true` (cells): shrinks all fixed items by the
-    ///   same ratio so they fit without horizontal scrolling or clipping.
+    /// - `proportionalShrink: true` (cells): shrinks declared widths and minimums
+    ///   by the same ratio so they fit without horizontal scrolling.
     ///
     /// - Parameters:
     ///   - availableSpace: Total space to distribute (height or width).
     ///   - dimensions: Array of `GridDimension` values, one per item.
     ///   - spacing: Gap between items.
-    ///   - proportionalShrink: When `true`, fixed items shrink proportionally
-    ///     on overflow rather than triggering scrolling.
+    ///   - proportionalShrink: When `true`, declared sizes and minimums shrink
+    ///     proportionally on overflow rather than triggering scrolling.
     /// - Returns: Array of resolved sizes (same count as `dimensions`) and a
     ///   `needsScrolling` flag (always `false` when `proportionalShrink` is `true`).
     private func distributeSizes(
@@ -575,37 +703,26 @@ public class ControlGrid: UIScrollView {
                 flexibleWeights[i] = Swift.max(0, weight)
                 flexibleMinimums[i] = min
                 flexibleMaximums[i] = max
+            case .fitting:
+                assertionFailure("Fitting dimensions must be measured before distribution")
             }
         }
 
-        // Handle proportional shrink for horizontal axis
-        if proportionalShrink && fixedTotal > spaceForItems {
-            let ratio = fixedTotal > 0 ? max(0, spaceForItems) / fixedTotal : 0
-            for i in 0..<count {
-                switch dimensions[i] {
-                case .fixed, .fraction:
-                    sizes[i] *= ratio
-                case .flexible, .weighted:
-                    break
-                }
-            }
-            // Flexible items get 0 (no space left after fixed items shrunk to fill)
-            return (sizes, false)
-        }
-
-        // Minimum check for vertical scrolling trigger
+        // Check whether declared sizes and minimums fit.
         var minTotal: CGFloat = fixedTotal
         for i in flexibleIndices {
             minTotal += max(0, flexibleMinimums[i] ?? 0)
         }
 
         if minTotal > spaceForItems {
-            // Content doesn't fit even at minimum sizes
-            var remaining = spaceForItems - fixedTotal
+            // Vertical rows keep their minimums and scroll. Horizontal cells compress all
+            // declared sizes and minimums by the same ratio, so none is clipped.
             for i in flexibleIndices {
-                let allocated = max(0, flexibleMinimums[i] ?? 0)
-                sizes[i] = allocated
-                remaining -= allocated
+                sizes[i] = max(0, flexibleMinimums[i] ?? 0)
+            }
+            if proportionalShrink {
+                let ratio = minTotal > 0 ? max(0, spaceForItems) / minTotal : 0
+                sizes = sizes.map { $0 * ratio }
             }
             return (sizes, !proportionalShrink)
         }

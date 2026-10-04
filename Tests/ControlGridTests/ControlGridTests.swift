@@ -199,6 +199,147 @@ final class ControlGridTests: XCTestCase {
         XCTAssertEqual(grid.contentViews, [first, alternate, last])
     }
 
+    func testHorizontalMinimumsCompressToViewport() {
+        let first = UIView()
+        let second = UIView()
+        let grid = makeGrid(size: CGSize(width: 150, height: 80), cellSpacing: 10)
+        grid.setRows([ControlGridRow(cells: [
+            ControlGridCell(view: first, spec: CellSpec(width: .weighted(1, min: 100))),
+            ControlGridCell(view: second, spec: CellSpec(width: .weighted(1, min: 100))),
+        ])])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(first.superview!.frame.width, 75, accuracy: 0.001)
+        XCTAssertEqual(second.superview!.frame.width, 75, accuracy: 0.001)
+        XCTAssertEqual(second.superview!.frame.maxX, 150, accuracy: 0.001)
+        XCTAssertFalse(grid.isScrollEnabled)
+    }
+
+    func testSpacingCannotPushCellsBeyondNarrowViewport() {
+        let cells = (0..<3).map { _ in UIView() }
+        let grid = makeGrid(size: CGSize(width: 10, height: 80), cellSpacing: 8)
+        grid.setRows([ControlGridRow(cells: cells.map { ControlGridCell(view: $0) })])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(cells.last!.superview!.frame.maxX, 10, accuracy: 0.001)
+    }
+
+    func testFittingRowScrollsWhenItsContentCannotFit() {
+        let fixed = UIView()
+        let content = FittingView(size: CGSize(width: 40, height: 80))
+        let grid = makeGrid(size: CGSize(width: 200, height: 100), rowSpacing: 10)
+        grid.setRows([
+            row(fixed, height: .fixed(40)),
+            row(content, height: .fitting()),
+        ])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(content.superview!.frame.height, 80, accuracy: 0.001)
+        XCTAssertEqual(grid.contentSize.height, 130, accuracy: 0.001)
+        XCTAssertTrue(grid.isScrollEnabled)
+    }
+
+    func testFittingRowUsesAutoLayoutSizeWhenSizeThatFitsIsEmpty() {
+        let content = UIView()
+        content.heightAnchor.constraint(equalToConstant: 64).isActive = true
+        let grid = makeGrid(size: CGSize(width: 200, height: 100))
+        grid.setRows([row(content, height: .fitting())])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(content.superview!.frame.height, 64, accuracy: 0.001)
+    }
+
+    func testFittingParentCanMeasureNestedGrid() {
+        let child = makeGrid(size: .zero)
+        child.setRows([row(UIView(), height: .fixed(70))])
+        let parent = makeGrid(size: CGSize(width: 200, height: 100))
+        parent.setRows([row(child, height: .fitting())])
+        parent.layoutIfNeeded()
+
+        XCTAssertEqual(child.superview!.frame.height, 70, accuracy: 0.001)
+    }
+
+    func testFittingCellUsesContentWidthAndInsets() {
+        let content = FittingView(size: CGSize(width: 46, height: 20))
+        let grid = makeGrid(size: CGSize(width: 200, height: 60))
+        grid.setRows([ControlGridRow(cells: [
+            ControlGridCell(view: content, spec: CellSpec(
+                width: .fitting(),
+                insets: UIEdgeInsets(top: 0, left: 4, bottom: 0, right: 4))),
+        ], spec: RowSpec(horizontalAlignment: .trailing))])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(content.superview!.frame.width, 54, accuracy: 0.001)
+        XCTAssertEqual(content.superview!.frame.minX, 146, accuracy: 0.001)
+    }
+
+    func testMutableSpacingAndInsetsUpdateExistingCells() {
+        let first = UIView()
+        let second = UIView()
+        let grid = makeGrid(size: CGSize(width: 200, height: 100), cellSpacing: 0)
+        grid.setRows([ControlGridRow(cells: [.init(view: first), .init(view: second)])])
+        grid.layoutIfNeeded()
+        XCTAssertEqual(second.superview!.frame.minX, 100, accuracy: 0.001)
+
+        grid.defaultCellSpacing = 20
+        grid.defaultCellInsets = UIEdgeInsets(top: 0, left: 5, bottom: 0, right: 5)
+        grid.layoutIfNeeded()
+        first.superview!.layoutIfNeeded()
+
+        XCTAssertEqual(second.superview!.frame.minX, 110, accuracy: 0.001)
+        XCTAssertEqual(first.frame.minX, 5, accuracy: 0.001)
+    }
+
+    func testMutableRowSpacingAndContentAlignmentRelayout() {
+        let first = UIView()
+        let second = UIView()
+        let grid = makeGrid(size: CGSize(width: 100, height: 200))
+        grid.setRows([row(first, height: .fixed(40)), row(second, height: .fixed(40))])
+        grid.layoutIfNeeded()
+
+        grid.rowSpacing = 20
+        grid.contentAlignment = .bottom
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(first.superview!.frame.minY, 100, accuracy: 0.001)
+        XCTAssertEqual(second.superview!.frame.minY, 160, accuracy: 0.001)
+    }
+
+    func testLeadingFollowsRightToLeftDirection() {
+        let content = UIView()
+        let grid = makeGrid(size: CGSize(width: 200, height: 80))
+        grid.semanticContentAttribute = .forceRightToLeft
+        grid.setRows([ControlGridRow(cells: [
+            ControlGridCell(view: content, spec: CellSpec(width: .fixed(40))),
+        ], spec: RowSpec(horizontalAlignment: .leading))])
+        grid.layoutIfNeeded()
+
+        XCTAssertEqual(content.superview!.frame.minX, 160, accuracy: 0.001)
+    }
+
+    func testRemovingAllRowsResetsScrolling() {
+        let grid = makeGrid(size: CGSize(width: 100, height: 100))
+        grid.setRows([row(UIView(), height: .fixed(200))])
+        grid.layoutIfNeeded()
+        XCTAssertTrue(grid.isScrollEnabled)
+
+        grid.setRows([])
+        grid.layoutIfNeeded()
+        XCTAssertFalse(grid.isScrollEnabled)
+        XCTAssertFalse(grid.alwaysBounceVertical)
+        XCTAssertEqual(grid.contentSize, .zero)
+    }
+
+    private final class FittingView: UIView {
+        let fittingSize: CGSize
+        init(size: CGSize) {
+            fittingSize = size
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { nil }
+        override func sizeThatFits(_ size: CGSize) -> CGSize { fittingSize }
+    }
+
     private func makeGrid(
         size: CGSize,
         rowSpacing: CGFloat = 0,
